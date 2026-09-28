@@ -34,9 +34,22 @@
     .tool:active,.color:active { transform:scale(.96); }
     .tool.active { background:#64424a; color:white; }
     .tool.danger { color:#b94257; }
-    .save { margin-top:12px; width:100%; min-height:52px; border:0; border-radius:16px; font-weight:850; font-size:16px; color:white; background:linear-gradient(135deg,#ff8292,#ee5c79); box-shadow:0 7px 14px #e85e7750; }
+    .export-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:12px; }
+    .save { min-height:50px; border:0; border-radius:14px; font-weight:850; font-size:14px; color:white; background:linear-gradient(135deg,#ff8292,#ee5c79); box-shadow:0 7px 14px #e85e7750; }
+    .save.all { grid-column:1 / -1; min-height:52px; font-size:16px; background:linear-gradient(135deg,#64424a,#8d5b67); }
     .save:active { transform:translateY(1px); }
     .toast { min-height:20px; margin:12px 0 0; text-align:center; color:#966d70; font-size:14px; font-weight:600; }
+    .export-preview { position:fixed; z-index:10; inset:0; display:grid; place-items:center; padding:18px; background:#442f3788; }
+    .export-preview[hidden] { display:none; }
+    .preview-card { width:min(680px,100%); max-height:92vh; overflow:auto; padding:18px; border-radius:22px; background:#fffaf5; box-shadow:0 16px 44px #2d1f244d; }
+    .preview-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+    .preview-head strong { font-size:17px; }
+    .preview-close { width:36px; height:36px; border:0; border-radius:50%; background:#f1ded2; font-size:22px; line-height:1; }
+    .preview-note { margin:0 0 13px; color:#8d6c69; font-size:13px; line-height:1.5; }
+    .preview-images { display:grid; gap:14px; }
+    .preview-item { border:1px solid #efd5c2; border-radius:14px; overflow:hidden; background:#fff; }
+    .preview-item img { width:100%; display:block; }
+    .preview-item a { display:block; padding:10px; color:#7d3f4c; text-align:center; font-weight:800; text-decoration:none; }
     @media (max-width:380px) { .app{padding-left:12px;padding-right:12px}.board-wrap{height:calc(100vw - 24px)}.palette{gap:7px}.tools{gap:7px}.tool{font-size:13px} }
   </style>
 </head>
@@ -59,7 +72,11 @@
         <button class="tool" id="redo">↷ 重做</button>
         <button class="tool danger" id="clear">清空</button>
       </div>
-      <button class="save" id="save">儲存作品圖片</button>
+      <div class="export-actions" aria-label="選擇要儲存的圖片">
+        <button class="save" id="saveArtwork">儲存作品圖</button>
+        <button class="save" id="saveChart">儲存座標色號圖</button>
+        <button class="save all" id="saveBoth">兩種都儲存</button>
+      </div>
       <div class="toast" id="toast" aria-live="polite"></div>
     </section>
   </main>
@@ -174,7 +191,87 @@
     };
     document.querySelector('#zoomOut').onclick=()=>setZoom(zoom-.25);
     document.querySelector('#zoomIn').onclick=()=>setZoom(zoom+.25);
-    document.querySelector('#save').onclick=()=>{ const output=document.createElement('canvas'), o=output.getContext('2d'), pad=64; output.width=output.height=canvas.width+pad*2; o.fillStyle='#fffaf5';o.fillRect(0,0,output.width,output.height);o.drawImage(canvas,pad,pad); const a=document.createElement('a');a.download='我的拼豆作品.png';a.href=output.toDataURL('image/png');a.click(); toast.textContent='作品圖片已儲存！'; setTimeout(()=>toast.textContent='',2400); };
+    function downloadCanvas(source, filename) {
+      const a=document.createElement('a'); a.download=filename; a.href=source.toDataURL('image/png'); a.click();
+    }
+    function showExportPreview(items) {
+      let modal=document.querySelector('#exportPreview');
+      if(!modal) {
+        modal=document.createElement('div'); modal.id='exportPreview'; modal.className='export-preview'; modal.hidden=true;
+        modal.innerHTML='<section class="preview-card" role="dialog" aria-modal="true" aria-label="作品圖片預覽"><div class="preview-head"><strong>圖片已生成</strong><button class="preview-close" type="button" aria-label="關閉">×</button></div><p class="preview-note">手機上可直接長按圖片儲存；也可點下方文字下載。</p><div class="preview-images"></div></section>';
+        modal.querySelector('.preview-close').onclick=()=>{ modal.hidden=true; document.body.style.overflow=''; };
+        modal.addEventListener('click',e=>{ if(e.target===modal) { modal.hidden=true; document.body.style.overflow=''; } });
+        document.body.append(modal);
+      }
+      const list=modal.querySelector('.preview-images'); list.innerHTML='';
+      items.forEach(({canvas,filename,label})=>{
+        const url=canvas.toDataURL('image/png'), item=document.createElement('div'), image=document.createElement('img'), link=document.createElement('a');
+        item.className='preview-item'; image.src=url; image.alt=label; link.href=url; link.download=filename; link.textContent=`下載：${label}`;
+        item.append(image,link); list.append(item);
+      });
+      modal.hidden=false; document.body.style.overflow='hidden';
+    }
+    function colorLabel(hex) {
+      const found=colors.find(c=>c[0].toLowerCase()===hex.toLowerCase());
+      return found ? found[1] : hex.replace('#','').toUpperCase();
+    }
+    function diagramText(hex) {
+      const label=colorLabel(hex);
+      return /^#[0-9a-f]{6}$/i.test(label) ? label.slice(1) : label;
+    }
+    function drawPatternChart() {
+      const cell=Math.max(26, Math.min(52, Math.floor(1400/size)));
+      const ruler=Math.max(32, Math.round(cell*.72)), titleHeight=Math.max(52, Math.round(cell*1.15)), pad=Math.max(18,Math.round(cell*.42));
+      const chart=size*cell, width=chart+ruler*2+pad*2, height=chart+ruler*2+titleHeight+pad*2;
+      const output=document.createElement('canvas'), o=output.getContext('2d'); output.width=width; output.height=height;
+      o.fillStyle='#fffdf9'; o.fillRect(0,0,width,height);
+      const left=pad+ruler, top=pad+titleHeight+ruler;
+      o.fillStyle='#746c68'; o.font=`700 ${Math.max(20,Math.round(cell*.55))}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
+      o.textAlign='left'; o.textBaseline='middle'; o.fillText(`MARD 拼豆圖稿（${size} × ${size}）`,left,pad+titleHeight*.45);
+      o.font=`700 ${Math.max(10,Math.round(cell*.31))}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
+      o.textAlign='center'; o.textBaseline='middle'; o.fillStyle='#54504d';
+      for(let i=0;i<size;i++) {
+        const p=i*cell+cell/2;
+        o.fillText(i+1,left+p,top-ruler/2); o.fillText(i+1,left+p,top+chart+ruler/2);
+        o.fillText(i+1,left-ruler/2,top+p); o.fillText(i+1,left+chart+ruler/2,top+p);
+      }
+      o.fillStyle='#fbfaf7'; o.fillRect(left,top,chart,chart);
+      for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
+        const color=grid[y*size+x], px=left+x*cell, py=top+y*cell;
+        if(color) {
+          o.fillStyle=color; o.fillRect(px+1,py+1,cell-2,cell-2);
+          const label=diagramText(color);
+          o.fillStyle=textColor(color).replace('.52','.82').replace('.58','.88');
+          let font=Math.max(7,Math.floor(cell/(label.length>3?3.45:2.55)));
+          o.font=`800 ${font}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
+          o.textAlign='center'; o.textBaseline='middle';
+          o.fillText(label,px+cell/2,py+cell/2,cell-4);
+        }
+      }
+      o.beginPath();
+      for(let i=0;i<=size;i++) { const p=i*cell; o.moveTo(left+p,top); o.lineTo(left+p,top+chart); o.moveTo(left,top+p); o.lineTo(left+chart,top+p); }
+      o.strokeStyle='#b9b5af'; o.lineWidth=Math.max(1,cell*.028); o.stroke();
+      o.strokeStyle='#6b6560'; o.lineWidth=Math.max(1.5,cell*.06); o.strokeRect(left,top,chart,chart);
+      return output;
+    }
+    function saveArtwork() {
+      const output=document.createElement('canvas'), o=output.getContext('2d'), pad=64;
+      output.width=output.height=canvas.width+pad*2; o.fillStyle='#fffaf5'; o.fillRect(0,0,output.width,output.height); o.drawImage(canvas,pad,pad);
+      downloadCanvas(output,'我的拼豆作品.png');
+      return output;
+    }
+    function saveChart() { const output=drawPatternChart(); downloadCanvas(output,'我的拼豆圖稿（座標色號）.png'); return output; }
+    document.querySelector('#saveArtwork').onclick=()=>{
+      const output=saveArtwork(); showExportPreview([{canvas:output,filename:'我的拼豆作品.png',label:'拼豆作品圖'}]); toast.textContent='作品圖片已生成！'; setTimeout(()=>toast.textContent='',2400);
+    };
+    document.querySelector('#saveChart').onclick=()=>{
+      const output=saveChart(); showExportPreview([{canvas:output,filename:'我的拼豆圖稿（座標色號）.png',label:'座標色號圖稿'}]); toast.textContent='座標色號圖稿已生成！'; setTimeout(()=>toast.textContent='',2400);
+    };
+    document.querySelector('#saveBoth').onclick=()=>{
+      const artwork=saveArtwork(), chart=saveChart();
+      showExportPreview([{canvas:artwork,filename:'我的拼豆作品.png',label:'拼豆作品圖'},{canvas:chart,filename:'我的拼豆圖稿（座標色號）.png',label:'座標色號圖稿'}]);
+      toast.textContent='兩張圖片已生成！'; setTimeout(()=>toast.textContent='',2400);
+    };
     window.addEventListener('resize',resize); renderPalette(); const restored=restoreProject(); choose(selected); resize(); if(restored) toast.textContent='已自動載入上次的作品'; loadMardPalette();
   </script>
 </body>
