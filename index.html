@@ -15,7 +15,7 @@
     h1 { margin:0; font-size:clamp(22px,5vw,30px); letter-spacing:.03em; }
     .badge { background:#fff; border:2px solid #f7d5bd; border-radius:999px; padding:7px 11px; font-size:13px; font-weight:700; white-space:nowrap; }
     .board-wrap { height:min(644px,calc(100vw - 36px)); background:var(--paper); border:3px solid #fff; box-shadow:var(--shadow); border-radius:25px; padding:13px; overflow:auto; }
-    canvas { width:100%; aspect-ratio:1; display:block; border-radius:16px; background:#f1d9c7; touch-action:pan-x pan-y; }
+    canvas { width:100%; aspect-ratio:1; display:block; border-radius:16px; background:#f1d9c7; touch-action:none; }
     .hint { text-align:center; margin:12px 0 16px; color:#8d6c69; font-size:14px; }
     .panel { background:#fffaf5e8; border:2px solid #fff; border-radius:21px; box-shadow:var(--shadow); padding:14px; }
     .label { display:flex; justify-content:space-between; align-items:baseline; font-weight:800; font-size:14px; margin:0 3px 10px; }
@@ -75,9 +75,24 @@
     const count = document.querySelector('#count'), toast = document.querySelector('#toast');
     const boardSizeInput = document.querySelector('#boardSize'), boardSizeText = document.querySelector('#boardSizeText');
     const boardWrap = document.querySelector('#boardWrap'), zoomText = document.querySelector('#zoomText');
+    const STORAGE_KEY = 'mard-bead-workshop-v1';
     let grid = Array(size * size).fill(null), selected = 0, erase = false, history = [], future = [], zoom = 1;
+    const pointers=new Map(); let pinching=false, pinchStartDistance=0, pinchStartZoom=1;
+    function saveProject() {
+      try { localStorage.setItem(STORAGE_KEY,JSON.stringify({size,grid,zoom,selectedHex:colors[selected]?.[0]})); } catch (_) {}
+    }
+    function restoreProject() {
+      try {
+        const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (!saved || !Number.isInteger(saved.size) || saved.size<4 || saved.size>64 || !Array.isArray(saved.grid) || saved.grid.length!==saved.size*saved.size) return false;
+        size=saved.size; grid=saved.grid.map(v=>typeof v==='string'?v:null); zoom=Math.max(1,Math.min(4,Number(saved.zoom)||1));
+        const found=colors.findIndex(c=>c[0]===saved.selectedHex); if(found>=0) selected=found;
+        boardSizeInput.value=size; boardSizeText.textContent=size; zoomText.textContent=`${Math.round(zoom*100)}%`; canvas.style.width=`${zoom*100}%`;
+        canvas.setAttribute('aria-label',`${size}乘${size}拼豆創作板`); return true;
+      } catch (_) { return false; }
+    }
     function resize() { const px = Math.min(1024, Math.max(512, Math.round(canvas.clientWidth * devicePixelRatio))); canvas.width = canvas.height = px; draw(); }
-    function setZoom(next) { zoom=Math.max(1,Math.min(4,next)); canvas.style.width=`${zoom*100}%`; zoomText.textContent=`${Math.round(zoom*100)}%`; requestAnimationFrame(resize); }
+    function setZoom(next, shouldSave=true) { zoom=Math.max(1,Math.min(4,next)); canvas.style.width=`${zoom*100}%`; zoomText.textContent=`${Math.round(zoom*100)}%`; if(shouldSave) saveProject(); requestAnimationFrame(resize); }
     function draw() {
       const w = canvas.width, cell = w / size; ctx.clearRect(0,0,w,w);
       ctx.fillStyle='#efd5c2'; ctx.fillRect(0,0,w,w);
@@ -108,7 +123,7 @@
       ctx.beginPath(); ctx.arc(cx,cy,hole*1.05,0,Math.PI*2); ctx.fillStyle='#9d7e70'; ctx.fill();
       ctx.beginPath(); ctx.arc(cx,cy,hole*.68,0,Math.PI*2); ctx.fillStyle='#f5dfce'; ctx.fill();
     }
-    function choose(index) { selected=index; erase=false; [...palette.children].forEach((b,i)=>b.classList.toggle('selected',i===index)); document.querySelector('#eraser').classList.remove('active'); current.textContent=colors[index][1]; }
+    function choose(index) { selected=index; erase=false; [...palette.children].forEach((b,i)=>b.classList.toggle('selected',i===index)); document.querySelector('#eraser').classList.remove('active'); current.textContent=colors[index][1]; saveProject(); }
     function textColor(hex) { const n=parseInt(hex.slice(1),16), l=((n>>16)*299+((n>>8)&255)*587+(n&255)*114)/1000; return l>155?'rgba(58,43,47,.52)':'rgba(255,255,255,.58)'; }
     function renderPalette() {
       palette.innerHTML='';
@@ -119,7 +134,7 @@
         const response=await fetch('https://raw.githubusercontent.com/HansBug/pindou-color-data/main/mard-221-alfonse-doudou/colors.json');
         const data=await response.json();
         if (!Array.isArray(data.colors) || data.colors.length<200) throw new Error('色卡資料不完整');
-        colors=data.colors.map(c=>[c.hex,c.code]); renderPalette(); choose(0);
+        const activeHex=colors[selected]?.[0]; colors=data.colors.map(c=>[c.hex,c.code]); renderPalette(); choose(Math.max(0,colors.findIndex(c=>c[0]===activeHex)));
         document.querySelector('#paletteTitle').textContent=`MARD ${colors.length} 色`;
         toast.textContent=`已載入 MARD ${colors.length} 色完整色卡`;
         setTimeout(()=>toast.textContent='',2600);
@@ -128,24 +143,39 @@
         toast.textContent='完整色卡暫時無法載入，先使用基本色盤。';
       }
     }
-    function record(next) { history.push(grid.slice()); if(history.length>80) history.shift(); grid=next; future=[]; draw(); }
+    function record(next) { history.push(grid.slice()); if(history.length>80) history.shift(); grid=next; future=[]; saveProject(); draw(); }
     function paint(e) { const r=canvas.getBoundingClientRect(), x=Math.floor((e.clientX-r.left)/r.width*size), y=Math.floor((e.clientY-r.top)/r.height*size); if(x<0||y<0||x>=size||y>=size)return; const i=y*size+x, value=erase?null:colors[selected][0]; if(grid[i]===value)return; const next=grid.slice(); next[i]=value; record(next); }
-    canvas.addEventListener('pointerdown',paint);
+    function pointerDistance() { const pts=[...pointers.values()]; return Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y); }
+    canvas.addEventListener('pointerdown',e=>{
+      e.preventDefault(); canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      if(pointers.size===2) { pinching=true; pinchStartDistance=pointerDistance(); pinchStartZoom=zoom; }
+    });
+    canvas.addEventListener('pointermove',e=>{
+      if(!pointers.has(e.pointerId)) return; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      if(pointers.size===2 && pinchStartDistance) { e.preventDefault(); setZoom(pinchStartZoom*(pointerDistance()/pinchStartDistance),false); }
+    });
+    function finishPointer(e) {
+      const wasPinching=pinching; pointers.delete(e.pointerId);
+      if(wasPinching) { if(!pointers.size) { pinching=false; saveProject(); } return; }
+      if(!pointers.size) paint(e);
+    }
+    canvas.addEventListener('pointerup',finishPointer);
+    canvas.addEventListener('pointercancel',e=>{ pointers.delete(e.pointerId); if(!pointers.size) pinching=false; });
     document.querySelector('#eraser').onclick=()=>{ erase=!erase; document.querySelector('#eraser').classList.toggle('active',erase); [...palette.children].forEach(b=>b.classList.remove('selected')); current.textContent=erase?'橡皮擦':colors[selected][1]; };
-    document.querySelector('#undo').onclick=()=>{ if(!history.length)return; future.push(grid.slice()); grid=history.pop(); draw(); };
-    document.querySelector('#redo').onclick=()=>{ if(!future.length)return; history.push(grid.slice()); grid=future.pop(); draw(); };
+    document.querySelector('#undo').onclick=()=>{ if(!history.length)return; future.push(grid.slice()); grid=history.pop(); saveProject(); draw(); };
+    document.querySelector('#redo').onclick=()=>{ if(!future.length)return; history.push(grid.slice()); grid=future.pop(); saveProject(); draw(); };
     document.querySelector('#clear').onclick=()=>{ if(grid.every(v=>!v))return; if(confirm('確定要清空這張拼豆作品嗎？')) record(Array(size*size).fill(null)); };
     document.querySelector('#resizeBoard').onclick=()=>{
       const next = Math.max(4,Math.min(64,Math.round(Number(boardSizeInput.value)||size)));
       boardSizeInput.value=next;
       if(next===size)return;
       if(grid.some(Boolean) && !confirm(`要換成 ${next} × ${next} 的方格板嗎？目前作品會清空。`)) { boardSizeInput.value=size; return; }
-      size=next; grid=Array(size*size).fill(null); history=[]; future=[]; boardSizeText.textContent=size; canvas.setAttribute('aria-label',`${size}乘${size}拼豆創作板`); draw();
+      size=next; grid=Array(size*size).fill(null); history=[]; future=[]; boardSizeText.textContent=size; canvas.setAttribute('aria-label',`${size}乘${size}拼豆創作板`); saveProject(); draw();
     };
     document.querySelector('#zoomOut').onclick=()=>setZoom(zoom-.25);
     document.querySelector('#zoomIn').onclick=()=>setZoom(zoom+.25);
     document.querySelector('#save').onclick=()=>{ const output=document.createElement('canvas'), o=output.getContext('2d'), pad=64; output.width=output.height=canvas.width+pad*2; o.fillStyle='#fffaf5';o.fillRect(0,0,output.width,output.height);o.drawImage(canvas,pad,pad); const a=document.createElement('a');a.download='我的拼豆作品.png';a.href=output.toDataURL('image/png');a.click(); toast.textContent='作品圖片已儲存！'; setTimeout(()=>toast.textContent='',2400); };
-    window.addEventListener('resize',resize); renderPalette(); choose(0); resize(); loadMardPalette();
+    window.addEventListener('resize',resize); renderPalette(); const restored=restoreProject(); choose(selected); resize(); if(restored) toast.textContent='已自動載入上次的作品'; loadMardPalette();
   </script>
 </body>
 </html>
