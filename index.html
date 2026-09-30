@@ -29,7 +29,7 @@
     .palette { display:grid; grid-template-columns:repeat(8,1fr); gap:9px; max-height:270px; overflow:auto; padding:4px; }
     .color { appearance:none; width:100%; aspect-ratio:1; border-radius:50%; border:3px solid #fff; box-shadow:0 2px 5px #57333a33; padding:0; position:relative; font-size:12px; font-weight:900; letter-spacing:-.04em; }
     .color.selected { outline:3px solid var(--ink); outline-offset:2px; transform:translateY(-1px); }
-    .tools { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-top:14px; }
+    .tools { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin:12px 0; }
     .tool { min-height:49px; border:0; border-radius:14px; background:#fff; box-shadow:0 3px 8px #9a5b641d; font-weight:750; font-size:14px; }
     .tool:active,.color:active { transform:scale(.96); }
     .tool.active { background:#64424a; color:white; }
@@ -58,6 +58,12 @@
   <main class="app">
     <header><h1>我的拼豆工坊</h1><span class="badge" id="count">0 / 256 顆</span></header>
     <section class="board-wrap" id="boardWrap"><canvas id="board" aria-label="16乘16拼豆創作板"></canvas></section>
+    <div class="tools" aria-label="編輯工具">
+      <button class="tool" id="eraser">橡皮擦</button>
+      <button class="tool" id="undo">↶ 復原</button>
+      <button class="tool" id="redo">↷ 重做</button>
+      <button class="tool danger" id="clear">清空</button>
+    </div>
     <div class="zoom-controls" aria-label="拼豆板縮放"><button id="zoomOut" aria-label="縮小">−</button><span id="zoomText">100%</span><button id="zoomIn" aria-label="放大">＋</button></div>
     <p class="hint">輕點方格放上拼豆；放大後可單指拖曳移動畫面</p>
     <section class="panel">
@@ -67,12 +73,6 @@
       </div>
       <div class="label"><span id="paletteTitle">MARD 色號</span><span class="current" id="current">載入中…</span></div>
       <div class="palette" id="palette"></div>
-      <div class="tools">
-        <button class="tool" id="eraser">橡皮擦</button>
-        <button class="tool" id="undo">↶ 復原</button>
-        <button class="tool" id="redo">↷ 重做</button>
-        <button class="tool danger" id="clear">清空</button>
-      </div>
       <button class="import" id="importImage" type="button">從照片轉成 MARD 色號圖</button>
       <input id="imageInput" type="file" accept="image/*" hidden>
       <div class="export-actions" aria-label="選擇要儲存的圖片">
@@ -246,11 +246,15 @@
         document.body.append(modal);
       }
       const list=modal.querySelector('.preview-images'); list.innerHTML='';
+      modal.querySelector('.preview-note').textContent=items.length>1
+        ? '手機會依序顯示所有圖稿；請逐張長按圖片儲存，或點各圖下方的下載文字。'
+        : '手機上可直接長按圖片儲存；也可點下方文字下載。';
       items.forEach(({canvas,filename,label})=>{
         const url=canvas.toDataURL('image/png'), item=document.createElement('div'), image=document.createElement('img'), link=document.createElement('a');
         item.className='preview-item'; image.src=url; image.alt=label; link.href=url; link.download=filename; link.textContent=`下載：${label}`;
         item.append(image,link); list.append(item);
       });
+      modal.querySelector('.preview-card').scrollTop=0;
       modal.hidden=false; document.body.style.overflow='hidden';
     }
     function colorLabel(hex) {
@@ -314,10 +318,12 @@
     function saveArtwork() {
       const output=document.createElement('canvas'), o=output.getContext('2d'), pad=64;
       output.width=output.height=canvas.width+pad*2; o.fillStyle='#fffaf5'; o.fillRect(0,0,output.width,output.height); o.drawImage(canvas,pad,pad);
-      downloadCanvas(output,'我的拼豆作品.png');
       return output;
     }
-    function saveChart() { const charts=createPatternCharts(); charts.forEach(chart=>downloadCanvas(chart.canvas,chart.filename)); return charts; }
+    function saveChart() {
+      // 手機瀏覽器常會擋掉同一次操作的多個自動下載，因此改由預覽中的每張下載連結個別儲存。
+      return createPatternCharts();
+    }
     document.querySelector('#saveArtwork').onclick=()=>{
       const output=saveArtwork(); showExportPreview([{canvas:output,filename:'我的拼豆作品.png',label:'拼豆作品圖'}]); toast.textContent='作品圖片已生成！'; setTimeout(()=>toast.textContent='',2400);
     };
