@@ -34,6 +34,7 @@
     .tool:active,.color:active { transform:scale(.96); }
     .tool.active { background:#64424a; color:white; }
     .tool.danger { color:#b94257; }
+    .import { width:100%; min-height:50px; margin-top:10px; border:2px dashed #e5af97; border-radius:14px; background:#fff5ed; color:#875159; font-weight:850; font-size:15px; }
     .export-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:12px; }
     .save { min-height:50px; border:0; border-radius:14px; font-weight:850; font-size:14px; color:white; background:linear-gradient(135deg,#ff8292,#ee5c79); box-shadow:0 7px 14px #e85e7750; }
     .save.all { grid-column:1 / -1; min-height:52px; font-size:16px; background:linear-gradient(135deg,#64424a,#8d5b67); }
@@ -58,10 +59,10 @@
     <header><h1>我的拼豆工坊</h1><span class="badge" id="count">0 / 256 顆</span></header>
     <section class="board-wrap" id="boardWrap"><canvas id="board" aria-label="16乘16拼豆創作板"></canvas></section>
     <div class="zoom-controls" aria-label="拼豆板縮放"><button id="zoomOut" aria-label="縮小">−</button><span id="zoomText">100%</span><button id="zoomIn" aria-label="放大">＋</button></div>
-    <p class="hint">選一個顏色，再點方格放上拼豆</p>
+    <p class="hint">輕點方格放上拼豆；放大後可單指拖曳移動畫面</p>
     <section class="panel">
       <div class="board-options" aria-label="拼豆板大小">
-        <span>方格板</span><input id="boardSize" type="number" min="4" max="64" value="16" inputmode="numeric" aria-label="每邊格數"><span>×</span><span id="boardSizeText">16</span>
+        <span>方格板</span><input id="boardSize" type="number" min="4" max="128" value="16" inputmode="numeric" aria-label="每邊格數"><span>×</span><span id="boardSizeText">16</span>
         <button id="resizeBoard">套用</button>
       </div>
       <div class="label"><span id="paletteTitle">MARD 色號</span><span class="current" id="current">載入中…</span></div>
@@ -72,6 +73,8 @@
         <button class="tool" id="redo">↷ 重做</button>
         <button class="tool danger" id="clear">清空</button>
       </div>
+      <button class="import" id="importImage" type="button">從照片轉成 MARD 色號圖</button>
+      <input id="imageInput" type="file" accept="image/*" hidden>
       <div class="export-actions" aria-label="選擇要儲存的圖片">
         <button class="save" id="saveArtwork">儲存作品圖</button>
         <button class="save" id="saveChart">儲存座標色號圖</button>
@@ -95,13 +98,14 @@
     const STORAGE_KEY = 'mard-bead-workshop-v1';
     let grid = Array(size * size).fill(null), selected = 0, erase = false, history = [], future = [], zoom = 1;
     const pointers=new Map(); let pinching=false, pinchStartDistance=0, pinchStartZoom=1;
+    let panning=false, panPointerId=null, panStart=null, panLast=null;
     function saveProject() {
       try { localStorage.setItem(STORAGE_KEY,JSON.stringify({size,grid,zoom,selectedHex:colors[selected]?.[0]})); } catch (_) {}
     }
     function restoreProject() {
       try {
         const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));
-        if (!saved || !Number.isInteger(saved.size) || saved.size<4 || saved.size>64 || !Array.isArray(saved.grid) || saved.grid.length!==saved.size*saved.size) return false;
+        if (!saved || !Number.isInteger(saved.size) || saved.size<4 || saved.size>128 || !Array.isArray(saved.grid) || saved.grid.length!==saved.size*saved.size) return false;
         size=saved.size; grid=saved.grid.map(v=>typeof v==='string'?v:null); zoom=Math.max(1,Math.min(4,Number(saved.zoom)||1));
         const found=colors.findIndex(c=>c[0]===saved.selectedHex); if(found>=0) selected=found;
         boardSizeInput.value=size; boardSizeText.textContent=size; zoomText.textContent=`${Math.round(zoom*100)}%`; canvas.style.width=`${zoom*100}%`;
@@ -161,29 +165,67 @@
       }
     }
     function record(next) { history.push(grid.slice()); if(history.length>80) history.shift(); grid=next; future=[]; saveProject(); draw(); }
+    function nearestMardColor(red,green,blue) {
+      let closest=colors[0][0], shortest=Infinity;
+      for(const [hex] of colors) {
+        const value=parseInt(hex.slice(1),16), r=value>>16, g=(value>>8)&255, b=value&255;
+        // 人眼對綠色更敏感，因此在比對時提高綠色的權重。
+        const distance=2*(red-r)**2+4*(green-g)**2+3*(blue-b)**2;
+        if(distance<shortest) { shortest=distance; closest=hex; }
+      }
+      return closest;
+    }
+    function convertImageToGrid(file) {
+      if(!file || !file.type.startsWith('image/')) return;
+      if(grid.some(Boolean) && !confirm(`要將照片轉為 ${size} × ${size} 的色號圖嗎？目前作品會被取代。`)) { document.querySelector('#imageInput').value=''; return; }
+      toast.textContent='正在把照片轉成色號圖…';
+      const image=new Image(), url=URL.createObjectURL(file);
+      image.onload=()=>{
+        const sample=document.createElement('canvas'), s=sample.getContext('2d',{willReadFrequently:true}); sample.width=size; sample.height=size;
+        const scale=Math.max(size/image.naturalWidth,size/image.naturalHeight), width=image.naturalWidth*scale, height=image.naturalHeight*scale;
+        s.clearRect(0,0,size,size); s.drawImage(image,(size-width)/2,(size-height)/2,width,height);
+        const pixels=s.getImageData(0,0,size,size).data, next=Array(size*size);
+        for(let i=0;i<next.length;i++) {
+          const p=i*4; next[i]=pixels[p+3]<32 ? null : nearestMardColor(pixels[p],pixels[p+1],pixels[p+2]);
+        }
+        URL.revokeObjectURL(url); record(next); document.querySelector('#imageInput').value='';
+        toast.textContent=`已轉成 ${size} × ${size} MARD 色號圖！`; setTimeout(()=>toast.textContent='',2800);
+      };
+      image.onerror=()=>{ URL.revokeObjectURL(url); document.querySelector('#imageInput').value=''; toast.textContent='這張圖片無法讀取，請換一張再試。'; };
+      image.src=url;
+    }
     function paint(e) { const r=canvas.getBoundingClientRect(), x=Math.floor((e.clientX-r.left)/r.width*size), y=Math.floor((e.clientY-r.top)/r.height*size); if(x<0||y<0||x>=size||y>=size)return; const i=y*size+x, value=erase?null:colors[selected][0]; if(grid[i]===value)return; const next=grid.slice(); next[i]=value; record(next); }
     function pointerDistance() { const pts=[...pointers.values()]; return Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y); }
     canvas.addEventListener('pointerdown',e=>{
       e.preventDefault(); canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-      if(pointers.size===2) { pinching=true; pinchStartDistance=pointerDistance(); pinchStartZoom=zoom; }
+      if(pointers.size===1) { panPointerId=e.pointerId; panStart={x:e.clientX,y:e.clientY}; panLast=panStart; panning=false; }
+      if(pointers.size===2) { pinching=true; panning=false; pinchStartDistance=pointerDistance(); pinchStartZoom=zoom; }
     });
     canvas.addEventListener('pointermove',e=>{
       if(!pointers.has(e.pointerId)) return; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
       if(pointers.size===2 && pinchStartDistance) { e.preventDefault(); setZoom(pinchStartZoom*(pointerDistance()/pinchStartDistance),false); }
+      else if(pointers.size===1 && e.pointerId===panPointerId) {
+        const distance=Math.hypot(e.clientX-panStart.x,e.clientY-panStart.y);
+        if(distance>6) panning=true;
+        if(panning) { boardWrap.scrollLeft-=e.clientX-panLast.x; boardWrap.scrollTop-=e.clientY-panLast.y; }
+        panLast={x:e.clientX,y:e.clientY};
+      }
     });
     function finishPointer(e) {
-      const wasPinching=pinching; pointers.delete(e.pointerId);
+      const wasPinching=pinching, wasPanning=panning; pointers.delete(e.pointerId);
       if(wasPinching) { if(!pointers.size) { pinching=false; saveProject(); } return; }
-      if(!pointers.size) paint(e);
+      if(!pointers.size) { if(!wasPanning) paint(e); panning=false; panPointerId=null; panStart=null; panLast=null; }
     }
     canvas.addEventListener('pointerup',finishPointer);
-    canvas.addEventListener('pointercancel',e=>{ pointers.delete(e.pointerId); if(!pointers.size) pinching=false; });
+    canvas.addEventListener('pointercancel',e=>{ pointers.delete(e.pointerId); if(!pointers.size) { pinching=false; panning=false; panPointerId=null; } });
     document.querySelector('#eraser').onclick=()=>{ erase=!erase; document.querySelector('#eraser').classList.toggle('active',erase); [...palette.children].forEach(b=>b.classList.remove('selected')); current.textContent=erase?'橡皮擦':colors[selected][1]; };
     document.querySelector('#undo').onclick=()=>{ if(!history.length)return; future.push(grid.slice()); grid=history.pop(); saveProject(); draw(); };
     document.querySelector('#redo').onclick=()=>{ if(!future.length)return; history.push(grid.slice()); grid=future.pop(); saveProject(); draw(); };
     document.querySelector('#clear').onclick=()=>{ if(grid.every(v=>!v))return; if(confirm('確定要清空這張拼豆作品嗎？')) record(Array(size*size).fill(null)); };
+    document.querySelector('#importImage').onclick=()=>document.querySelector('#imageInput').click();
+    document.querySelector('#imageInput').addEventListener('change',e=>convertImageToGrid(e.target.files[0]));
     document.querySelector('#resizeBoard').onclick=()=>{
-      const next = Math.max(4,Math.min(64,Math.round(Number(boardSizeInput.value)||size)));
+      const next = Math.max(4,Math.min(128,Math.round(Number(boardSizeInput.value)||size)));
       boardSizeInput.value=next;
       if(next===size)return;
       if(grid.some(Boolean) && !confirm(`要換成 ${next} × ${next} 的方格板嗎？目前作品會清空。`)) { boardSizeInput.value=size; return; }
@@ -220,7 +262,8 @@
       return /^#[0-9a-f]{6}$/i.test(label) ? label.slice(1) : label;
     }
     function drawPatternChart() {
-      const cell=Math.max(26, Math.min(52, Math.floor(1400/size)));
+      // 大於約 120 × 120 時以精簡格圖輸出，避免手機建立過大的圖片而失敗。
+      const cell=Math.max(8, Math.min(52, Math.floor(2048/size)));
       const ruler=Math.max(32, Math.round(cell*.72)), titleHeight=Math.max(52, Math.round(cell*1.15)), pad=Math.max(18,Math.round(cell*.42));
       const chart=size*cell, width=chart+ruler*2+pad*2, height=chart+ruler*2+titleHeight+pad*2;
       const output=document.createElement('canvas'), o=output.getContext('2d'); output.width=width; output.height=height;
@@ -240,12 +283,14 @@
         const color=grid[y*size+x], px=left+x*cell, py=top+y*cell;
         if(color) {
           o.fillStyle=color; o.fillRect(px+1,py+1,cell-2,cell-2);
-          const label=diagramText(color);
-          o.fillStyle=textColor(color).replace('.52','.82').replace('.58','.88');
-          let font=Math.max(7,Math.floor(cell/(label.length>3?3.45:2.55)));
-          o.font=`800 ${font}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
-          o.textAlign='center'; o.textBaseline='middle';
-          o.fillText(label,px+cell/2,py+cell/2,cell-4);
+          if(cell>=16) {
+            const label=diagramText(color);
+            o.fillStyle=textColor(color).replace('.52','.82').replace('.58','.88');
+            let font=Math.max(7,Math.floor(cell/(label.length>3?3.45:2.55)));
+            o.font=`800 ${font}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
+            o.textAlign='center'; o.textBaseline='middle';
+            o.fillText(label,px+cell/2,py+cell/2,cell-4);
+          }
         }
       }
       o.beginPath();
