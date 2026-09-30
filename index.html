@@ -25,7 +25,7 @@
     .board-options button { border:0; border-radius:10px; padding:8px 12px; background:#64424a; color:#fff; font-weight:800; }
     .zoom-controls { display:flex; justify-content:center; align-items:center; gap:9px; margin:12px 0 2px; }
     .zoom-controls button { width:38px; height:34px; border:0; border-radius:10px; background:#fff; box-shadow:0 2px 5px #9a5b6425; font-weight:900; font-size:19px; }
-    .zoom-controls span { min-width:50px; text-align:center; color:#75565a; font-size:14px; font-weight:800; }
+    .zoom-controls input { width:68px; height:34px; border:2px solid #efd5c2; border-radius:10px; background:#fff; color:#75565a; text-align:center; font:inherit; font-size:14px; font-weight:800; }
     .palette { display:grid; grid-template-columns:repeat(8,1fr); gap:9px; max-height:270px; overflow:auto; padding:4px; }
     .color { appearance:none; width:100%; aspect-ratio:1; border-radius:50%; border:3px solid #fff; box-shadow:0 2px 5px #57333a33; padding:0; position:relative; font-size:12px; font-weight:900; letter-spacing:-.04em; }
     .color.selected { outline:3px solid var(--ink); outline-offset:2px; transform:translateY(-1px); }
@@ -64,7 +64,7 @@
       <button class="tool" id="redo">↷ 重做</button>
       <button class="tool danger" id="clear">清空</button>
     </div>
-    <div class="zoom-controls" aria-label="拼豆板縮放"><button id="zoomOut" aria-label="縮小">−</button><span id="zoomText">100%</span><button id="zoomIn" aria-label="放大">＋</button></div>
+    <div class="zoom-controls" aria-label="拼豆板縮放"><button id="zoomOut" aria-label="縮小">−</button><input id="zoomInput" type="number" min="100" max="1000" step="25" value="100" inputmode="numeric" aria-label="縮放百分比"><button id="zoomIn" aria-label="放大">＋</button></div>
     <p class="hint">輕點方格放上拼豆；放大後可單指拖曳移動畫面</p>
     <section class="panel">
       <div class="board-options" aria-label="拼豆板大小">
@@ -94,8 +94,8 @@
     const palette = document.querySelector('#palette'), current = document.querySelector('#current');
     const count = document.querySelector('#count'), toast = document.querySelector('#toast');
     const boardSizeInput = document.querySelector('#boardSize'), boardSizeText = document.querySelector('#boardSizeText');
-    const boardWrap = document.querySelector('#boardWrap'), zoomText = document.querySelector('#zoomText');
-    const STORAGE_KEY = 'mard-bead-workshop-v1';
+    const boardWrap = document.querySelector('#boardWrap'), zoomInput = document.querySelector('#zoomInput');
+    const STORAGE_KEY = 'mard-bead-workshop-v1', MAX_ZOOM=10, MAX_BOARD_DISPLAY_PX=4096;
     let grid = Array(size * size).fill(null), selected = 0, erase = false, history = [], future = [], zoom = 1;
     const pointers=new Map(); let pinching=false, pinchStartDistance=0, pinchStartZoom=1;
     let panning=false, panPointerId=null, panStart=null, panLast=null;
@@ -106,14 +106,24 @@
       try {
         const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));
         if (!saved || !Number.isInteger(saved.size) || saved.size<4 || saved.size>256 || !Array.isArray(saved.grid) || saved.grid.length!==saved.size*saved.size) return false;
-        size=saved.size; grid=saved.grid.map(v=>typeof v==='string'?v:null); zoom=Math.max(1,Math.min(4,Number(saved.zoom)||1));
+        size=saved.size; grid=saved.grid.map(v=>typeof v==='string'?v:null); zoom=Math.max(1,Math.min(MAX_ZOOM,Number(saved.zoom)||1));
         const found=colors.findIndex(c=>c[0]===saved.selectedHex); if(found>=0) selected=found;
-        boardSizeInput.value=size; boardSizeText.textContent=size; zoomText.textContent=`${Math.round(zoom*100)}%`; canvas.style.width=`${zoom*100}%`;
+        boardSizeInput.value=size; boardSizeText.textContent=size; zoomInput.value=Math.round(zoom*100); canvas.style.width=`${zoom*100}%`;
         canvas.setAttribute('aria-label',`${size}乘${size}拼豆創作板`); return true;
       } catch (_) { return false; }
     }
     function resize() { const px = Math.min(1024, Math.max(512, Math.round(canvas.clientWidth * devicePixelRatio))); canvas.width = canvas.height = px; draw(); }
-    function setZoom(next, shouldSave=true) { zoom=Math.max(1,Math.min(4,next)); canvas.style.width=`${zoom*100}%`; zoomText.textContent=`${Math.round(zoom*100)}%`; if(shouldSave) saveProject(); requestAnimationFrame(resize); }
+    function maxZoomForDisplay() {
+      // 以方格板在 100% 時的寬度推算，避免放大後的元素超過 4096px 而耗盡手機記憶體。
+      const baseWidth=Math.max(1,boardWrap.clientWidth-26);
+      return Math.max(1,Math.min(MAX_ZOOM,MAX_BOARD_DISPLAY_PX/baseWidth));
+    }
+    function setZoom(next, shouldSave=true) {
+      const maxZoom=maxZoomForDisplay(), nextZoom=Math.max(1,Math.min(maxZoom,next)), reachedLimit=next>maxZoom && zoom===maxZoom;
+      zoom=nextZoom; canvas.style.width=`${zoom*100}%`; zoomInput.value=Math.round(zoom*100); if(shouldSave) saveProject();
+      if(reachedLimit && shouldSave) { toast.textContent='已達方格板可顯示的最大尺寸'; setTimeout(()=>toast.textContent='',1800); }
+      requestAnimationFrame(resize);
+    }
     function draw() {
       const w = canvas.width, cell = w / size; ctx.clearRect(0,0,w,w);
       ctx.fillStyle='#efd5c2'; ctx.fillRect(0,0,w,w);
@@ -233,6 +243,7 @@
     };
     document.querySelector('#zoomOut').onclick=()=>setZoom(zoom-.25);
     document.querySelector('#zoomIn').onclick=()=>setZoom(zoom+.25);
+    zoomInput.addEventListener('change',()=>setZoom((Number(zoomInput.value)||100)/100));
     function downloadCanvas(source, filename) {
       const a=document.createElement('a'); a.download=filename; a.href=source.toDataURL('image/png'); a.click();
     }
@@ -335,7 +346,7 @@
       showExportPreview([{canvas:artwork,filename:'我的拼豆作品.png',label:'拼豆作品圖'},...charts]);
       toast.textContent=charts.length>1?'已生成作品圖與 4 張分割色號圖稿！':'兩張圖片已生成！'; setTimeout(()=>toast.textContent='',2800);
     };
-    window.addEventListener('resize',resize); renderPalette(); const restored=restoreProject(); choose(selected); resize(); if(restored) toast.textContent='已自動載入上次的作品'; loadMardPalette();
+    window.addEventListener('resize',()=>setZoom(zoom,false)); renderPalette(); const restored=restoreProject(); choose(selected); setZoom(zoom,false); if(restored) toast.textContent='已自動載入上次的作品'; loadMardPalette();
   </script>
 </body>
 </html>
