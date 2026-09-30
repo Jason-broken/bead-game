@@ -261,25 +261,28 @@
       const label=colorLabel(hex);
       return /^#[0-9a-f]{6}$/i.test(label) ? label.slice(1) : label;
     }
-    function drawPatternChart(startX=0,startY=0,chartSize=size) {
-      const cell=Math.max(16, Math.min(52, Math.floor(2048/chartSize)));
+    function drawPatternChart(startX=0,startY=0,chartWidth=size,chartHeight=chartWidth) {
+      const cell=Math.max(16, Math.min(52, Math.floor(2048/Math.max(chartWidth,chartHeight))));
       const ruler=Math.max(32, Math.round(cell*.72)), titleHeight=Math.max(52, Math.round(cell*1.15)), pad=Math.max(18,Math.round(cell*.42));
-      const chart=chartSize*cell, width=chart+ruler*2+pad*2, height=chart+ruler*2+titleHeight+pad*2;
+      const chartW=chartWidth*cell, chartH=chartHeight*cell, width=chartW+ruler*2+pad*2, height=chartH+ruler*2+titleHeight+pad*2;
       const output=document.createElement('canvas'), o=output.getContext('2d'); output.width=width; output.height=height;
       o.fillStyle='#fffdf9'; o.fillRect(0,0,width,height);
       const left=pad+ruler, top=pad+titleHeight+ruler;
       o.fillStyle='#746c68'; o.font=`700 ${Math.max(20,Math.round(cell*.55))}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
-      const range=`第 ${startX+1}–${startX+chartSize} 欄・第 ${startY+1}–${startY+chartSize} 列`;
+      const range=`第 ${startX+1}–${startX+chartWidth} 欄・第 ${startY+1}–${startY+chartHeight} 列`;
       o.textAlign='left'; o.textBaseline='middle'; o.fillText(`MARD 拼豆圖稿（${range}）`,left,pad+titleHeight*.45);
       o.font=`700 ${Math.max(10,Math.round(cell*.31))}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
       o.textAlign='center'; o.textBaseline='middle'; o.fillStyle='#54504d';
-      for(let i=0;i<chartSize;i++) {
+      for(let i=0;i<chartWidth;i++) {
         const p=i*cell+cell/2;
-        o.fillText(startX+i+1,left+p,top-ruler/2); o.fillText(startX+i+1,left+p,top+chart+ruler/2);
-        o.fillText(startY+i+1,left-ruler/2,top+p); o.fillText(startY+i+1,left+chart+ruler/2,top+p);
+        o.fillText(startX+i+1,left+p,top-ruler/2); o.fillText(startX+i+1,left+p,top+chartH+ruler/2);
       }
-      o.fillStyle='#fbfaf7'; o.fillRect(left,top,chart,chart);
-      for(let y=0;y<chartSize;y++) for(let x=0;x<chartSize;x++) {
+      for(let i=0;i<chartHeight;i++) {
+        const p=i*cell+cell/2;
+        o.fillText(startY+i+1,left-ruler/2,top+p); o.fillText(startY+i+1,left+chartW+ruler/2,top+p);
+      }
+      o.fillStyle='#fbfaf7'; o.fillRect(left,top,chartW,chartH);
+      for(let y=0;y<chartHeight;y++) for(let x=0;x<chartWidth;x++) {
         const color=grid[(startY+y)*size+startX+x], px=left+x*cell, py=top+y*cell;
         if(color) {
           o.fillStyle=color; o.fillRect(px+1,py+1,cell-2,cell-2);
@@ -292,17 +295,19 @@
         }
       }
       o.beginPath();
-      for(let i=0;i<=size;i++) { const p=i*cell; o.moveTo(left+p,top); o.lineTo(left+p,top+chart); o.moveTo(left,top+p); o.lineTo(left+chart,top+p); }
+      for(let i=0;i<=chartWidth;i++) { const p=i*cell; o.moveTo(left+p,top); o.lineTo(left+p,top+chartH); }
+      for(let i=0;i<=chartHeight;i++) { const p=i*cell; o.moveTo(left,top+p); o.lineTo(left+chartW,top+p); }
       o.strokeStyle='#b9b5af'; o.lineWidth=Math.max(1,cell*.028); o.stroke();
-      o.strokeStyle='#6b6560'; o.lineWidth=Math.max(1.5,cell*.06); o.strokeRect(left,top,chart,chart);
+      o.strokeStyle='#6b6560'; o.lineWidth=Math.max(1.5,cell*.06); o.strokeRect(left,top,chartW,chartH);
       return output;
     }
     function createPatternCharts() {
-      const partSize=Math.min(128,size), charts=[];
+      // 128 × 128 以上的作品固定分成四張，讓色號文字保有足夠大小。
+      const partSize=size>=128 ? Math.ceil(size/2) : size, charts=[];
       for(let y=0;y<size;y+=partSize) for(let x=0;x<size;x+=partSize) {
         const width=Math.min(partSize,size-x), height=Math.min(partSize,size-y), section=Math.min(width,height);
         const index=charts.length+1, total=Math.ceil(size/partSize)**2;
-        charts.push({canvas:drawPatternChart(x,y,section),filename:`我的拼豆圖稿（座標色號）-第${index}張.png`,label:total===1?'座標色號圖稿':`座標色號圖稿 ${index}／${total}（第 ${x+1}–${x+section} 欄、第 ${y+1}–${y+section} 列）`});
+        charts.push({canvas:drawPatternChart(x,y,width,height),filename:`我的拼豆圖稿（座標色號）-第${index}張.png`,label:total===1?'座標色號圖稿':`座標色號圖稿 ${index}／${total}（第 ${x+1}–${x+width} 欄、第 ${y+1}–${y+height} 列）`});
       }
       return charts;
     }
