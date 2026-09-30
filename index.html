@@ -62,7 +62,7 @@
     <p class="hint">輕點方格放上拼豆；放大後可單指拖曳移動畫面</p>
     <section class="panel">
       <div class="board-options" aria-label="拼豆板大小">
-        <span>方格板</span><input id="boardSize" type="number" min="4" max="128" value="16" inputmode="numeric" aria-label="每邊格數"><span>×</span><span id="boardSizeText">16</span>
+        <span>方格板</span><input id="boardSize" type="number" min="4" max="256" value="16" inputmode="numeric" aria-label="每邊格數"><span>×</span><span id="boardSizeText">16</span>
         <button id="resizeBoard">套用</button>
       </div>
       <div class="label"><span id="paletteTitle">MARD 色號</span><span class="current" id="current">載入中…</span></div>
@@ -105,7 +105,7 @@
     function restoreProject() {
       try {
         const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));
-        if (!saved || !Number.isInteger(saved.size) || saved.size<4 || saved.size>128 || !Array.isArray(saved.grid) || saved.grid.length!==saved.size*saved.size) return false;
+        if (!saved || !Number.isInteger(saved.size) || saved.size<4 || saved.size>256 || !Array.isArray(saved.grid) || saved.grid.length!==saved.size*saved.size) return false;
         size=saved.size; grid=saved.grid.map(v=>typeof v==='string'?v:null); zoom=Math.max(1,Math.min(4,Number(saved.zoom)||1));
         const found=colors.findIndex(c=>c[0]===saved.selectedHex); if(found>=0) selected=found;
         boardSizeInput.value=size; boardSizeText.textContent=size; zoomText.textContent=`${Math.round(zoom*100)}%`; canvas.style.width=`${zoom*100}%`;
@@ -225,7 +225,7 @@
     document.querySelector('#importImage').onclick=()=>document.querySelector('#imageInput').click();
     document.querySelector('#imageInput').addEventListener('change',e=>convertImageToGrid(e.target.files[0]));
     document.querySelector('#resizeBoard').onclick=()=>{
-      const next = Math.max(4,Math.min(128,Math.round(Number(boardSizeInput.value)||size)));
+      const next = Math.max(4,Math.min(256,Math.round(Number(boardSizeInput.value)||size)));
       boardSizeInput.value=next;
       if(next===size)return;
       if(grid.some(Boolean) && !confirm(`要換成 ${next} × ${next} 的方格板嗎？目前作品會清空。`)) { boardSizeInput.value=size; return; }
@@ -261,36 +261,34 @@
       const label=colorLabel(hex);
       return /^#[0-9a-f]{6}$/i.test(label) ? label.slice(1) : label;
     }
-    function drawPatternChart() {
-      // 大於約 120 × 120 時以精簡格圖輸出，避免手機建立過大的圖片而失敗。
-      const cell=Math.max(8, Math.min(52, Math.floor(2048/size)));
+    function drawPatternChart(startX=0,startY=0,chartSize=size) {
+      const cell=Math.max(16, Math.min(52, Math.floor(2048/chartSize)));
       const ruler=Math.max(32, Math.round(cell*.72)), titleHeight=Math.max(52, Math.round(cell*1.15)), pad=Math.max(18,Math.round(cell*.42));
-      const chart=size*cell, width=chart+ruler*2+pad*2, height=chart+ruler*2+titleHeight+pad*2;
+      const chart=chartSize*cell, width=chart+ruler*2+pad*2, height=chart+ruler*2+titleHeight+pad*2;
       const output=document.createElement('canvas'), o=output.getContext('2d'); output.width=width; output.height=height;
       o.fillStyle='#fffdf9'; o.fillRect(0,0,width,height);
       const left=pad+ruler, top=pad+titleHeight+ruler;
       o.fillStyle='#746c68'; o.font=`700 ${Math.max(20,Math.round(cell*.55))}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
-      o.textAlign='left'; o.textBaseline='middle'; o.fillText(`MARD 拼豆圖稿（${size} × ${size}）`,left,pad+titleHeight*.45);
+      const range=`第 ${startX+1}–${startX+chartSize} 欄・第 ${startY+1}–${startY+chartSize} 列`;
+      o.textAlign='left'; o.textBaseline='middle'; o.fillText(`MARD 拼豆圖稿（${range}）`,left,pad+titleHeight*.45);
       o.font=`700 ${Math.max(10,Math.round(cell*.31))}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
       o.textAlign='center'; o.textBaseline='middle'; o.fillStyle='#54504d';
-      for(let i=0;i<size;i++) {
+      for(let i=0;i<chartSize;i++) {
         const p=i*cell+cell/2;
-        o.fillText(i+1,left+p,top-ruler/2); o.fillText(i+1,left+p,top+chart+ruler/2);
-        o.fillText(i+1,left-ruler/2,top+p); o.fillText(i+1,left+chart+ruler/2,top+p);
+        o.fillText(startX+i+1,left+p,top-ruler/2); o.fillText(startX+i+1,left+p,top+chart+ruler/2);
+        o.fillText(startY+i+1,left-ruler/2,top+p); o.fillText(startY+i+1,left+chart+ruler/2,top+p);
       }
       o.fillStyle='#fbfaf7'; o.fillRect(left,top,chart,chart);
-      for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
-        const color=grid[y*size+x], px=left+x*cell, py=top+y*cell;
+      for(let y=0;y<chartSize;y++) for(let x=0;x<chartSize;x++) {
+        const color=grid[(startY+y)*size+startX+x], px=left+x*cell, py=top+y*cell;
         if(color) {
           o.fillStyle=color; o.fillRect(px+1,py+1,cell-2,cell-2);
-          if(cell>=16) {
-            const label=diagramText(color);
-            o.fillStyle=textColor(color).replace('.52','.82').replace('.58','.88');
-            let font=Math.max(7,Math.floor(cell/(label.length>3?3.45:2.55)));
-            o.font=`800 ${font}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
-            o.textAlign='center'; o.textBaseline='middle';
-            o.fillText(label,px+cell/2,py+cell/2,cell-4);
-          }
+          const label=diagramText(color);
+          o.fillStyle=textColor(color).replace('.52','.82').replace('.58','.88');
+          let font=Math.max(7,Math.floor(cell/(label.length>3?3.45:2.55)));
+          o.font=`800 ${font}px -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif`;
+          o.textAlign='center'; o.textBaseline='middle';
+          o.fillText(label,px+cell/2,py+cell/2,cell-4);
         }
       }
       o.beginPath();
@@ -299,23 +297,32 @@
       o.strokeStyle='#6b6560'; o.lineWidth=Math.max(1.5,cell*.06); o.strokeRect(left,top,chart,chart);
       return output;
     }
+    function createPatternCharts() {
+      const partSize=Math.min(128,size), charts=[];
+      for(let y=0;y<size;y+=partSize) for(let x=0;x<size;x+=partSize) {
+        const width=Math.min(partSize,size-x), height=Math.min(partSize,size-y), section=Math.min(width,height);
+        const index=charts.length+1, total=Math.ceil(size/partSize)**2;
+        charts.push({canvas:drawPatternChart(x,y,section),filename:`我的拼豆圖稿（座標色號）-第${index}張.png`,label:total===1?'座標色號圖稿':`座標色號圖稿 ${index}／${total}（第 ${x+1}–${x+section} 欄、第 ${y+1}–${y+section} 列）`});
+      }
+      return charts;
+    }
     function saveArtwork() {
       const output=document.createElement('canvas'), o=output.getContext('2d'), pad=64;
       output.width=output.height=canvas.width+pad*2; o.fillStyle='#fffaf5'; o.fillRect(0,0,output.width,output.height); o.drawImage(canvas,pad,pad);
       downloadCanvas(output,'我的拼豆作品.png');
       return output;
     }
-    function saveChart() { const output=drawPatternChart(); downloadCanvas(output,'我的拼豆圖稿（座標色號）.png'); return output; }
+    function saveChart() { const charts=createPatternCharts(); charts.forEach(chart=>downloadCanvas(chart.canvas,chart.filename)); return charts; }
     document.querySelector('#saveArtwork').onclick=()=>{
       const output=saveArtwork(); showExportPreview([{canvas:output,filename:'我的拼豆作品.png',label:'拼豆作品圖'}]); toast.textContent='作品圖片已生成！'; setTimeout(()=>toast.textContent='',2400);
     };
     document.querySelector('#saveChart').onclick=()=>{
-      const output=saveChart(); showExportPreview([{canvas:output,filename:'我的拼豆圖稿（座標色號）.png',label:'座標色號圖稿'}]); toast.textContent='座標色號圖稿已生成！'; setTimeout(()=>toast.textContent='',2400);
+      const charts=saveChart(); showExportPreview(charts); toast.textContent=charts.length>1?'已生成 4 張分割色號圖稿！':'座標色號圖稿已生成！'; setTimeout(()=>toast.textContent='',2800);
     };
     document.querySelector('#saveBoth').onclick=()=>{
-      const artwork=saveArtwork(), chart=saveChart();
-      showExportPreview([{canvas:artwork,filename:'我的拼豆作品.png',label:'拼豆作品圖'},{canvas:chart,filename:'我的拼豆圖稿（座標色號）.png',label:'座標色號圖稿'}]);
-      toast.textContent='兩張圖片已生成！'; setTimeout(()=>toast.textContent='',2400);
+      const artwork=saveArtwork(), charts=saveChart();
+      showExportPreview([{canvas:artwork,filename:'我的拼豆作品.png',label:'拼豆作品圖'},...charts]);
+      toast.textContent=charts.length>1?'已生成作品圖與 4 張分割色號圖稿！':'兩張圖片已生成！'; setTimeout(()=>toast.textContent='',2800);
     };
     window.addEventListener('resize',resize); renderPalette(); const restored=restoreProject(); choose(selected); resize(); if(restored) toast.textContent='已自動載入上次的作品'; loadMardPalette();
   </script>
