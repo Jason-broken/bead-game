@@ -51,6 +51,18 @@
     .preview-item { border:1px solid #efd5c2; border-radius:14px; overflow:hidden; background:#fff; }
     .preview-item img { width:100%; display:block; }
     .preview-item a { display:block; padding:10px; color:#7d3f4c; text-align:center; font-weight:800; text-decoration:none; }
+    .crop-editor { position:fixed; z-index:11; inset:0; display:grid; place-items:center; padding:18px; background:#442f3788; }
+    .crop-editor[hidden] { display:none; }
+    .crop-card { width:min(520px,100%); padding:18px; border-radius:22px; background:#fffaf5; box-shadow:0 16px 44px #2d1f244d; }
+    .crop-card h2 { margin:0 0 5px; font-size:19px; }
+    .crop-card p { margin:0 0 14px; color:#8d6c69; font-size:13px; line-height:1.5; }
+    #cropCanvas { display:block; width:min(100%,400px); aspect-ratio:1; margin:auto; border-radius:14px; background:#eee2d7; touch-action:none; }
+    .crop-control { display:flex; align-items:center; gap:10px; margin:15px 0; color:#75565a; font-size:14px; font-weight:800; }
+    .crop-control input { flex:1; accent-color:#ff7c8f; }
+    .crop-actions { display:grid; grid-template-columns:1fr 1.35fr; gap:9px; }
+    .crop-actions button { min-height:46px; border:0; border-radius:13px; font:inherit; font-weight:850; }
+    .crop-cancel { background:#f1ded2; color:#76555b; }
+    .crop-apply { background:linear-gradient(135deg,#ff8292,#ee5c79); color:#fff; }
     @media (max-width:380px) { .app{padding-left:12px;padding-right:12px}.board-wrap{height:calc(100vw - 24px)}.palette{gap:7px}.tools{gap:7px}.tool{font-size:13px} }
   </style>
 </head>
@@ -185,24 +197,57 @@
       }
       return closest;
     }
+    let cropState=null, cropDragging=false, cropLastPoint=null;
+    function cropEditor() {
+      let modal=document.querySelector('#cropEditor');
+      if(modal) return modal;
+      modal=document.createElement('div'); modal.id='cropEditor'; modal.className='crop-editor'; modal.hidden=true;
+      modal.innerHTML='<section class="crop-card" role="dialog" aria-modal="true" aria-label="選取照片範圍"><h2>選取照片範圍</h2><p>拖曳照片選位置，再調整滑桿決定要取用的範圍大小。</p><canvas id="cropCanvas" width="640" height="640"></canvas><label class="crop-control"><span>選取大小</span><input id="cropZoom" type="range" min="1" max="4" step="0.01" value="1"><output id="cropZoomText">100%</output></label><div class="crop-actions"><button class="crop-cancel" type="button">取消</button><button class="crop-apply" type="button">套用並轉色號圖</button></div></section>';
+      const close=()=>{ modal.hidden=true; cropState=null; document.querySelector('#imageInput').value=''; };
+      modal.querySelector('.crop-cancel').onclick=close;
+      modal.addEventListener('click',e=>{ if(e.target===modal) close(); });
+      modal.querySelector('#cropZoom').addEventListener('input',e=>{
+        if(!cropState) return; cropState.scale=cropState.minScale*Number(e.target.value); clampCrop(); drawCropPreview();
+      });
+      modal.querySelector('.crop-apply').onclick=applyImageCrop;
+      const preview=modal.querySelector('#cropCanvas');
+      preview.addEventListener('pointerdown',e=>{ if(!cropState) return; preview.setPointerCapture(e.pointerId); cropDragging=true; cropLastPoint={x:e.clientX,y:e.clientY}; });
+      preview.addEventListener('pointermove',e=>{
+        if(!cropDragging || !cropState) return; cropState.x+=(e.clientX-cropLastPoint.x)*(640/preview.getBoundingClientRect().width); cropState.y+=(e.clientY-cropLastPoint.y)*(640/preview.getBoundingClientRect().height); cropLastPoint={x:e.clientX,y:e.clientY}; clampCrop(); drawCropPreview();
+      });
+      preview.addEventListener('pointerup',()=>cropDragging=false); preview.addEventListener('pointercancel',()=>cropDragging=false);
+      document.body.append(modal); return modal;
+    }
+    function clampCrop() {
+      const edge=640, width=cropState.image.naturalWidth*cropState.scale, height=cropState.image.naturalHeight*cropState.scale;
+      cropState.x=Math.min(0,Math.max(edge-width,cropState.x)); cropState.y=Math.min(0,Math.max(edge-height,cropState.y));
+    }
+    function drawCropPreview() {
+      const modal=document.querySelector('#cropEditor'), preview=modal.querySelector('#cropCanvas'), c=preview.getContext('2d'), edge=640;
+      c.fillStyle='#efe4d9'; c.fillRect(0,0,edge,edge); c.drawImage(cropState.image,cropState.x,cropState.y,cropState.image.naturalWidth*cropState.scale,cropState.image.naturalHeight*cropState.scale);
+      c.beginPath(); for(let i=1;i<3;i++) { const p=edge*i/3; c.moveTo(p,0); c.lineTo(p,edge); c.moveTo(0,p); c.lineTo(edge,p); } c.strokeStyle='#ffffffa8'; c.lineWidth=2; c.stroke(); c.strokeStyle='#fff'; c.lineWidth=5; c.strokeRect(0,0,edge,edge);
+      const value=Number(modal.querySelector('#cropZoom').value); modal.querySelector('#cropZoomText').textContent=`${Math.round(100/value)}%`;
+    }
     function convertImageToGrid(file) {
       if(!file || !file.type.startsWith('image/')) return;
-      if(grid.some(Boolean) && !confirm(`要將照片轉為 ${size} × ${size} 的色號圖嗎？目前作品會被取代。`)) { document.querySelector('#imageInput').value=''; return; }
-      toast.textContent='正在把照片轉成色號圖…';
       const image=new Image(), url=URL.createObjectURL(file);
       image.onload=()=>{
-        const sample=document.createElement('canvas'), s=sample.getContext('2d',{willReadFrequently:true}); sample.width=size; sample.height=size;
-        const scale=Math.max(size/image.naturalWidth,size/image.naturalHeight), width=image.naturalWidth*scale, height=image.naturalHeight*scale;
-        s.clearRect(0,0,size,size); s.drawImage(image,(size-width)/2,(size-height)/2,width,height);
-        const pixels=s.getImageData(0,0,size,size).data, next=Array(size*size);
-        for(let i=0;i<next.length;i++) {
-          const p=i*4; next[i]=pixels[p+3]<32 ? null : nearestMardColor(pixels[p],pixels[p+1],pixels[p+2]);
-        }
-        URL.revokeObjectURL(url); record(next); document.querySelector('#imageInput').value='';
-        toast.textContent=`已轉成 ${size} × ${size} MARD 色號圖！`; setTimeout(()=>toast.textContent='',2800);
+        URL.revokeObjectURL(url); const edge=640, minScale=Math.max(edge/image.naturalWidth,edge/image.naturalHeight);
+        cropState={image,minScale,scale:minScale,x:(edge-image.naturalWidth*minScale)/2,y:(edge-image.naturalHeight*minScale)/2};
+        const modal=cropEditor(); modal.querySelector('#cropZoom').value=1; modal.hidden=false; drawCropPreview();
       };
       image.onerror=()=>{ URL.revokeObjectURL(url); document.querySelector('#imageInput').value=''; toast.textContent='這張圖片無法讀取，請換一張再試。'; };
       image.src=url;
+    }
+    function applyImageCrop() {
+      if(!cropState) return;
+      if(grid.some(Boolean) && !confirm(`要將照片轉為 ${size} × ${size} 的色號圖嗎？目前作品會被取代。`)) return;
+      const sample=document.createElement('canvas'), s=sample.getContext('2d',{willReadFrequently:true}), edge=640; sample.width=size; sample.height=size;
+      s.drawImage(cropState.image,cropState.x*size/edge,cropState.y*size/edge,cropState.image.naturalWidth*cropState.scale*size/edge,cropState.image.naturalHeight*cropState.scale*size/edge);
+      const pixels=s.getImageData(0,0,size,size).data, next=Array(size*size);
+      for(let i=0;i<next.length;i++) { const p=i*4; next[i]=pixels[p+3]<32 ? null : nearestMardColor(pixels[p],pixels[p+1],pixels[p+2]); }
+      document.querySelector('#cropEditor').hidden=true; cropState=null; document.querySelector('#imageInput').value=''; record(next);
+      toast.textContent=`已轉成 ${size} × ${size} MARD 色號圖！`; setTimeout(()=>toast.textContent='',2800);
     }
     function paint(e) { const r=canvas.getBoundingClientRect(), x=Math.floor((e.clientX-r.left)/r.width*size), y=Math.floor((e.clientY-r.top)/r.height*size); if(x<0||y<0||x>=size||y>=size)return; const i=y*size+x, value=erase?null:colors[selected][0]; if(grid[i]===value)return; const next=grid.slice(); next[i]=value; record(next); }
     function pointerDistance() { const pts=[...pointers.values()]; return Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y); }
